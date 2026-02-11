@@ -116,6 +116,56 @@ Similar in design to FoundationDB's and Aria's commit protocols.
 - Committer implementation: `crates/database/src/committer.rs`
 - Database commit entry point: `crates/database/src/database.rs`
 
+#### Detailed Commit Flow
+
+Transactions don't write to the transaction log immediately. Instead they collect reads and writes locally, then submit the finalized transaction to the committer for validation.
+
+1. During execution, `Transaction` accumulates reads into `TransactionReadSet` and writes into `Writes` (an `OrdSet<Update>`)
+2. On completion, the transaction is finalized into `FinalTransaction` (reads + writes)
+3. `Committer::start_commit()` receives the `FinalTransaction` and calls `validate_commit()`
+4. `validate_commit()` assigns a commit timestamp and calls `commit_has_conflict()`, which checks the read set against **two** sources: already-published writes (in `LogWriter`) and staged-but-not-yet-published writes (in `PendingWrites`) — this prevents two concurrent transactions from both passing validation against published state but conflicting with each other
+5. The conflict check window is `(begin_timestamp, commit_ts]`. For each write in that window, `ReadSet::writes_overlap_docs()` checks whether the written document's index keys fall within any interval the transaction read
+6. If no conflict: the commit is staged in `PendingWrites`, then `write_to_persistence()` durably writes it, and finally `publish_commit()` pops it from pending, appends to the write log, and updates the snapshot manager
+7. If conflict: OCC error returned, the function runner retries at a new begin timestamp
+
+```mermaid
+sequenceDiagram
+    participant UDF as User Function
+    participant TX as Transaction
+    participant C as Committer
+    participant PW as PendingWrites
+    participant P as Persistence
+
+    UDF->>TX: read/write operations
+    TX->>TX: accumulate reads → TransactionReadSet
+    TX->>TX: accumulate writes → Writes (OrdSet<Update>)
+    UDF->>TX: finalize → FinalTransaction
+    TX->>C: start_commit(FinalTransaction)
+    C->>C: validate_commit()
+    C->>C: commit_has_conflict() — check ReadSet vs published + pending writes
+    alt conflict found
+        C-->>UDF: OCC error (retry)
+    else no conflict
+        C->>PW: push_back() — stage commit
+        C->>P: write_to_persistence() — durable commit point
+        P-->>C: success
+        C->>C: publish_commit() — pop from PendingWrites, append to write_log
+    end
+```
+
+| Component | File | Key struct / method |
+|-----------|------|---------------------|
+| Write accumulation | `writes.rs` | `Writes::update()` |
+| Read tracking | `reads.rs` | `ReadSet`, `TransactionReadSet` |
+| Transaction | `transaction.rs` | `Transaction` → `FinalTransaction` |
+| Commit validation | `committer.rs` | `Committer::validate_commit()` |
+| Conflict detection | `reads.rs` | `ReadSet::writes_overlap_docs()` |
+| Pending staging | `write_log.rs` | `PendingWrites::push_back()`, `is_stale()` |
+| Persistence write | `committer.rs` | `write_to_persistence()` |
+| Publish | `committer.rs` | `publish_commit()` |
+
+All files under `crates/database/src/`.
+
 ### Subscriptions
 
 Read sets also power realtime updates. After running a query, the system keeps its read set in the client's WebSocket session within the sync worker. When new entries appear in the transaction log, the same overlap-detection algorithm determines if the query result might have changed.
