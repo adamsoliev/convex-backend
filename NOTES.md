@@ -128,30 +128,7 @@ Transactions don't write to the transaction log immediately. Instead they collec
 6. If no conflict: the commit is staged in `PendingWrites`, then `write_to_persistence()` durably writes it, and finally `publish_commit()` pops it from pending, appends to the write log, and updates the snapshot manager
 7. If conflict: OCC error returned, the function runner retries at a new begin timestamp
 
-```mermaid
-sequenceDiagram
-    participant UDF as User Function
-    participant TX as Transaction
-    participant C as Committer
-    participant PW as PendingWrites
-    participant P as Persistence
-
-    UDF->>TX: read/write operations
-    TX->>TX: accumulate reads → TransactionReadSet
-    TX->>TX: accumulate writes → Writes (OrdSet<Update>)
-    UDF->>TX: finalize → FinalTransaction
-    TX->>C: start_commit(FinalTransaction)
-    C->>C: validate_commit()
-    C->>C: commit_has_conflict() — check ReadSet vs published + pending writes
-    alt conflict found
-        C-->>UDF: OCC error (retry)
-    else no conflict
-        C->>PW: push_back() — stage commit
-        C->>P: write_to_persistence() — durable commit point
-        P-->>C: success
-        C->>C: publish_commit() — pop from PendingWrites, append to write_log
-    end
-```
+<img src="commit-flow.png" alt="Detailed commit flow sequence diagram" width="600">
 
 | Component | File | Key struct / method |
 |-----------|------|---------------------|
