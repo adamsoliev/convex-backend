@@ -8,13 +8,13 @@ Notes from [How Convex Works](https://stack.convex.dev/how-convex-works) by Suja
 
 Convex is a database running in the cloud that executes client-defined API functions as transactions directly within the database. The frontend connects to a Convex deployment over a persistent WebSocket.
 
-![Deployment overview](https://cdn.sanity.io/images/ts10onj4/production/f20ad6be4bbaeb7c469466c2106e3f605f67d8e9-1588x931.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/f20ad6be4bbaeb7c469466c2106e3f605f67d8e9-1588x931.svg" alt="Deployment overview" style="max-width: 600px;">
 
 A Convex deployment has three main components:
 
-![High-level architecture](https://cdn.sanity.io/images/ts10onj4/production/2ae339f39a62935266bd1518844dbdb32f5667f3-1252x832.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/2ae339f39a62935266bd1518844dbdb32f5667f3-1252x832.svg" alt="High-level architecture" style="max-width: 600px;">
 
-![Deployment internals](https://cdn.sanity.io/images/ts10onj4/production/080ed291f78449353715fd412f161633ac237078-1412x1627.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/080ed291f78449353715fd412f161633ac237078-1412x1627.svg" alt="Deployment internals" style="max-width: 600px;">
 
 ```
 Cloud Deployment
@@ -58,9 +58,9 @@ An append-only data structure storing all versions of documents. Every document 
 
 Each timestamp *t* defines a snapshot of the database that includes all revisions up to *t*.
 
-![Transaction log](https://cdn.sanity.io/images/ts10onj4/production/46849de92a3a9faa7e393056c428a9a29b993a3a-1124x660.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/46849de92a3a9faa7e393056c428a9a29b993a3a-1124x660.svg" alt="Transaction log" style="max-width: 600px;">
 
-![Transaction log with updates](https://cdn.sanity.io/images/ts10onj4/production/34f7865d20bbedf57a192279a41cef39eeed1ec0-1124x980.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/34f7865d20bbedf57a192279a41cef39eeed1ec0-1124x980.svg" alt="Transaction log with updates" style="max-width: 600px;">
 
 - Timestamps are Hybrid Logical Clocks (nanoseconds since Unix epoch, 64-bit integer): `crates/common/src/types/timestamp.rs`
 - Write log (the in-memory portion of the tx log): `crates/database/src/write_log.rs`
@@ -71,9 +71,9 @@ Each timestamp *t* defines a snapshot of the database that includes all revision
 
 Built on top of the log, mapping each `_id` to its latest value. Uses standard multiversion concurrency control (MVCC) techniques so the index can be queried at any past timestamp. We don't store many copies -- see [CMU's Advanced DB Systems](https://www.cs.cmu.edu/~15721-f25/schedule.html).
 
-![Index mapping](https://cdn.sanity.io/images/ts10onj4/production/731ffc87aab77be756fe915d6fc3fe6f5ecbf45b-1124x980.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/731ffc87aab77be756fe915d6fc3fe6f5ecbf45b-1124x980.svg" alt="Index mapping" style="max-width: 600px;">
 
-![Multiversion index](https://cdn.sanity.io/images/ts10onj4/production/1e78ad935e2b51227b93448cc752f5991152bb8d-1124x980.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/1e78ad935e2b51227b93448cc752f5991152bb8d-1124x980.svg" alt="Multiversion index" style="max-width: 600px;">
 
 - Transaction-level index access: `crates/database/src/transaction_index.rs`
 - In-memory indexes in function runner: `crates/function_runner/src/in_memory_indexes.rs`
@@ -112,11 +112,11 @@ The commit protocol:
 
 Similar in design to FoundationDB's and Aria's commit protocols.
 
-![Commit protocol check](https://cdn.sanity.io/images/ts10onj4/production/dc3be57f330069703714473ad266f0693cdda3f7-1124x1172.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/dc3be57f330069703714473ad266f0693cdda3f7-1124x1172.svg" alt="Commit protocol check" style="max-width: 600px;">
 
-![Conflict detection](https://cdn.sanity.io/images/ts10onj4/production/b2c6c8c76eba8c59fe7cd381cf1e97e24debe0dd-1124x1172.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/b2c6c8c76eba8c59fe7cd381cf1e97e24debe0dd-1124x1172.svg" alt="Conflict detection" style="max-width: 600px;">
 
-![Transaction commit](https://cdn.sanity.io/images/ts10onj4/production/f3acb829fe53e5bb37cdb58add171bf783a5d8d9-1076x1316.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/f3acb829fe53e5bb37cdb58add171bf783a5d8d9-1076x1316.svg" alt="Transaction commit" style="max-width: 600px;">
 
 - Committer implementation: `crates/database/src/committer.rs`
 - Database commit entry point: `crates/database/src/database.rs`
@@ -127,9 +127,9 @@ Read sets also power realtime updates. After running a query, the system keeps i
 
 The subscription manager aggregates all client sessions, walks the transaction log once, and efficiently finds which subscriptions are invalidated.
 
-![Subscription manager](https://cdn.sanity.io/images/ts10onj4/production/06ad6e04496479c2c5cd7362c27f606e04f0d51e-1268x1300.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/06ad6e04496479c2c5cd7362c27f606e04f0d51e-1268x1300.svg" alt="Subscription manager" style="max-width: 600px;">
 
-![Subscription overlap detection](https://cdn.sanity.io/images/ts10onj4/production/1c717328429e37026eb3c40b09a088357e179d92-1124x996.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/1c717328429e37026eb3c40b09a088357e179d92-1124x996.svg" alt="Subscription overlap detection" style="max-width: 600px;">
 
 - Subscription manager: `crates/database/src/subscription.rs`
 - Local backend subscription handling: `crates/local_backend/src/subs/mod.rs`
@@ -156,7 +156,7 @@ Mutations must have no external side effects (enforced through sandboxing). Quer
 
 ### Executing a Query
 
-![Query request flow](https://cdn.sanity.io/images/ts10onj4/production/86bf1fae07efd38abaaafe95a5fb9bf15cef9839-1656x1855.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/86bf1fae07efd38abaaafe95a5fb9bf15cef9839-1656x1855.svg" alt="Query request flow" style="max-width: 600px;">
 
 1. Client mounts a component, React hook opens a WebSocket
 2. Query registered with the **sync worker** (`crates/sync/src/worker.rs`)
@@ -166,11 +166,11 @@ Mutations must have no external side effects (enforced through sandboxing). Quer
 6. Result + read set returned; subscription registered with the **subscription manager**
 7. Result sent back over WebSocket to client
 
-![WebSocket connection](https://cdn.sanity.io/images/ts10onj4/production/078f5fd47459a45b328460ad72c938f920788820-2084x1636.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/078f5fd47459a45b328460ad72c938f920788820-2084x1636.svg" alt="WebSocket connection" style="max-width: 600px;">
 
-![Query execution](https://cdn.sanity.io/images/ts10onj4/production/f6ba1966da6649035496f3532d3ad1a6fa7f50d9-1860x1616.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/f6ba1966da6649035496f3532d3ad1a6fa7f50d9-1860x1616.svg" alt="Query execution" style="max-width: 600px;">
 
-![Function runner cache](https://cdn.sanity.io/images/ts10onj4/production/0cac02f131fb6655dff43cf842b5f3c762c35265-1732x1781.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/0cac02f131fb6655dff43cf842b5f3c762c35265-1732x1781.svg" alt="Function runner cache" style="max-width: 600px;">
 
 ### Executing a Mutation
 
@@ -182,9 +182,9 @@ Mutations must have no external side effects (enforced through sandboxing). Quer
 6. On success: appends write set to transaction log, returns commit timestamp
 7. On conflict: aborts, function runner retries at new timestamp
 
-![Mutation execution](https://cdn.sanity.io/images/ts10onj4/production/f522b5dce500b6b0ac3f4036717e540030614e87-2004x1620.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/f522b5dce500b6b0ac3f4036717e540030614e87-2004x1620.svg" alt="Mutation execution" style="max-width: 600px;">
 
-![Committer processing](https://cdn.sanity.io/images/ts10onj4/production/8d739e25af4e2a66849b248bffa44007a761bfd5-1748x1620.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/8d739e25af4e2a66849b248bffa44007a761bfd5-1748x1620.svg" alt="Committer processing" style="max-width: 600px;">
 
 ### Updating a Subscription
 
@@ -193,9 +193,9 @@ Mutations must have no external side effects (enforced through sandboxing). Quer
 3. If overlap detected: query is re-run by the function runner at the new timestamp
 4. Updated result pushed to client over WebSocket
 
-![Subscription updates](https://cdn.sanity.io/images/ts10onj4/production/f93766ddd64152d67436d5e0826cf6a1da628870-1684x1657.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/f93766ddd64152d67436d5e0826cf6a1da628870-1684x1657.svg" alt="Subscription updates" style="max-width: 600px;">
 
-![Updated result propagation](https://cdn.sanity.io/images/ts10onj4/production/aa134b2a50b1298e4e9898ee711a5c3a457f1cde-1692x1620.svg)
+<img src="https://cdn.sanity.io/images/ts10onj4/production/aa134b2a50b1298e4e9898ee711a5c3a457f1cde-1692x1620.svg" alt="Updated result propagation" style="max-width: 600px;">
 
 ---
 
