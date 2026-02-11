@@ -16,24 +16,30 @@ A Convex deployment has three main components:
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/080ed291f78449353715fd412f161633ac237078-1412x1627.svg" alt="Deployment internals" width="600">
 
-| Component | Role | Crate | Key files |
-|-----------|------|-------|-----------|
-| **Sync Worker** | Manages WebSocket sessions, tracks query sets | `crates/sync/` | `worker.rs`, `state.rs` |
-| **Function Runner** | Executes UDFs in V8, stores code | `crates/function_runner/` | `server.rs`, `in_memory_indexes.rs` |
-| **Function Cache** | Caches query results consistently | `crates/application/` | `cache/mod.rs` |
-| **V8 / Isolate Runtime** | Sandboxed JS execution | `crates/isolate/` | `isolate_worker.rs`, `isolate2/runner.rs` |
-| **Database** | Core data layer | `crates/database/` | `database.rs`, `lib.rs` |
-| **Committer** | Validates and commits transactions | `crates/database/` | `committer.rs` |
-| **Transaction Log** | Append-only versioned document store | `crates/database/` | `write_log.rs`, `snapshot_manager.rs` |
-| **Subscriptions** | Realtime query invalidation | `crates/database/` | `subscription.rs` |
-| **Transactions** | Read/write sets, OCC | `crates/database/` | `transaction.rs`, `reads.rs`, `writes.rs` |
-| **Indexes** | MVCC index over the log | `crates/database/` | `transaction_index.rs`, `index_workers/` |
-| **Local Backend** | Entry point / HTTP server | `crates/local_backend/` | `lib.rs` |
-| **Application** | Orchestrates the above | `crates/application/` | `lib.rs`, `application_function_runner/mod.rs` |
+| Component | Role |
+|-----------|------|
+| Sync Worker | Manages WebSocket sessions, tracks query sets |
+| Function Runner | Executes UDFs in V8, caches results, stores code |
+| Database | Schema, tables, indexes, committer, tx log, subscriptions |
+
+**Codebase mapping:**
+
+| Component | Crate | Key files |
+|-----------|-------|-----------|
+| Sync Worker | `crates/sync/` | `worker.rs`, `state.rs` |
+| Function Runner | `crates/function_runner/` | `server.rs`, `in_memory_indexes.rs` |
+| Function Cache | `crates/application/` | `cache/mod.rs` |
+| V8 / Isolate Runtime | `crates/isolate/` | `isolate_worker.rs`, `isolate2/runner.rs` |
+| Database | `crates/database/` | `database.rs`, `lib.rs` |
+| Committer | `crates/database/` | `committer.rs` |
+| Transaction Log | `crates/database/` | `write_log.rs`, `snapshot_manager.rs` |
+| Subscriptions | `crates/database/` | `subscription.rs` |
+| Transactions | `crates/database/` | `transaction.rs`, `reads.rs`, `writes.rs` |
+| Indexes | `crates/database/` | `transaction_index.rs`, `index_workers/` |
+| Local Backend | `crates/local_backend/` | `lib.rs` |
+| Application | `crates/application/` | `lib.rs`, `application_function_runner/mod.rs` |
 
 ---
-
-## Convex at Rest
 
 ### Functions
 
@@ -71,8 +77,6 @@ Built on top of the log, mapping each `_id` to its latest value. Uses standard m
 - Index metadata/bootstrap: `crates/common/src/bootstrap_model/index/`
 
 ---
-
-## The Sync Engine
 
 ### Transactions & Optimistic Concurrency Control
 
@@ -142,8 +146,6 @@ Mutations must have no external side effects (enforced through sandboxing). Quer
 - Crypto RNG (deterministic seeding): `crates/isolate/src/environment/crypto_rng.rs`
 
 ---
-
-## Request Flows
 
 ### Executing a Query
 
