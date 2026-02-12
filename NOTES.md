@@ -53,8 +53,6 @@ All tables share the same timestamp sequence, and multiple changes at the same t
 
 Each timestamp *t* defines a database snapshot containing all revisions up to *t*.
 
-<img src="https://cdn.sanity.io/images/ts10onj4/production/46849de92a3a9faa7e393056c428a9a29b993a3a-1124x660.svg" alt="Transaction log" width="600">
-
 <img src="https://cdn.sanity.io/images/ts10onj4/production/34f7865d20bbedf57a192279a41cef39eeed1ec0-1124x980.svg" alt="Transaction log with updates" width="600">
 
 Timestamps are Hybrid Logical Clocks, represented as nanoseconds since the Unix epoch in a 64-bit integer (`crates/common/src/types/timestamp.rs`).
@@ -69,8 +67,6 @@ They use standard multiversion concurrency control (MVCC) techniques so the inde
 The system does not store many copies of each value -- see [CMU's Advanced DB Systems](https://www.cs.cmu.edu/~15721-f25/schedule.html) for background on MVCC implementation strategies.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/731ffc87aab77be756fe915d6fc3fe6f5ecbf45b-1124x980.svg" alt="Index mapping" width="600">
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/1e78ad935e2b51227b93448cc752f5991152bb8d-1124x980.svg" alt="Multiversion index" width="600">
 
 Transaction-level index access is in `crates/database/src/transaction_index.rs`.
 The function runner maintains in-memory indexes in `crates/function_runner/src/in_memory_indexes.rs`.
@@ -108,11 +104,7 @@ If overlap is found, the transaction is aborted and the function runner retries 
 
 This design is similar to FoundationDB's and Aria's commit protocols.
 
-<img src="https://cdn.sanity.io/images/ts10onj4/production/dc3be57f330069703714473ad266f0693cdda3f7-1124x1172.svg" alt="Commit protocol check" width="600">
-
 <img src="https://cdn.sanity.io/images/ts10onj4/production/b2c6c8c76eba8c59fe7cd381cf1e97e24debe0dd-1124x1172.svg" alt="Conflict detection" width="600">
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/f3acb829fe53e5bb37cdb58add171bf783a5d8d9-1076x1316.svg" alt="Transaction commit" width="600">
 
 The committer implementation is in `crates/database/src/committer.rs`.
 The database-level commit entry point is in `crates/database/src/database.rs`.
@@ -161,8 +153,6 @@ The subscription manager aggregates all client sessions, walks the transaction l
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/06ad6e04496479c2c5cd7362c27f606e04f0d51e-1268x1300.svg" alt="Subscription manager" width="600">
 
-<img src="https://cdn.sanity.io/images/ts10onj4/production/1c717328429e37026eb3c40b09a088357e179d92-1124x996.svg" alt="Subscription overlap detection" width="600">
-
 The subscription manager lives in `crates/database/src/subscription.rs`.
 Local backend subscription handling is in `crates/local_backend/src/subs/mod.rs`.
 The sync worker that manages WebSocket sessions and query sets is in `crates/sync/src/worker.rs`.
@@ -185,47 +175,6 @@ The isolate sandbox environment is in `crates/isolate/src/environment/udf/mod.rs
 Determinism checks are in `crates/isolate/src/request_scope.rs`.
 The syscall provider that serves as the controlled interface to the database is in `crates/isolate/src/environment/udf/syscall.rs`.
 Deterministic crypto RNG seeding is in `crates/isolate/src/environment/crypto_rng.rs`.
-
----
-
-## Executing a Query
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/86bf1fae07efd38abaaafe95a5fb9bf15cef9839-1656x1855.svg" alt="Query request flow" width="600">
-
-The client mounts a component and a React hook opens a WebSocket connection.
-The query is registered with the sync worker (`crates/sync/src/worker.rs`), which delegates it to the function runner (`crates/function_runner/src/server.rs`).
-The function runner first checks the function cache (`crates/application/src/cache/mod.rs`).
-On a cache miss, it spins up a V8 isolate and executes the query (`crates/isolate/src/isolate_worker.rs`).
-The result and read set are returned, a subscription is registered with the subscription manager, and the result is sent back to the client over the WebSocket.
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/078f5fd47459a45b328460ad72c938f920788820-2084x1636.svg" alt="WebSocket connection" width="600">
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/f6ba1966da6649035496f3532d3ad1a6fa7f50d9-1860x1616.svg" alt="Query execution" width="600">
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/0cac02f131fb6655dff43cf842b5f3c762c35265-1732x1781.svg" alt="Function runner cache" width="600">
-
-## Executing a Mutation
-
-The client sends a mutation request through the WebSocket and the sync worker forwards it to the function runner.
-The function runner executes the mutation in V8, producing a read set and a write set.
-These are sent to the committer (`crates/database/src/committer.rs`), which validates serializability by checking the read set against concurrent writes.
-On success, the write set is appended to the transaction log and a commit timestamp is returned.
-On conflict, the transaction is aborted and the function runner retries at a new timestamp.
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/f522b5dce500b6b0ac3f4036717e540030614e87-2004x1620.svg" alt="Mutation execution" width="600">
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/8d739e25af4e2a66849b248bffa44007a761bfd5-1748x1620.svg" alt="Committer processing" width="600">
-
-## Updating a Subscription
-
-When a mutation commits, a new entry appears in the transaction log.
-The subscription manager walks the log and checks for overlap with active read sets.
-If overlap is detected, the query is re-run by the function runner at the new timestamp.
-The updated result is pushed to the client over the WebSocket.
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/f93766ddd64152d67436d5e0826cf6a1da628870-1684x1657.svg" alt="Subscription updates" width="600">
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/aa134b2a50b1298e4e9898ee711a5c3a457f1cde-1692x1620.svg" alt="Updated result propagation" width="600">
 
 ---
 
