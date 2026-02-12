@@ -6,8 +6,7 @@ Notes from [How Convex Works](https://stack.convex.dev/how-convex-works) by Suja
 
 ## Overview
 
-Convex is a database running in the cloud that executes client-defined API functions as transactions directly within the database.
-The frontend connects to a Convex deployment over a persistent WebSocket.
+A Convex deployment is a database that executes application-defined functions as transactions, coupled with consistency guarantees via its sync protocol. 
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/2ae339f39a62935266bd1518844dbdb32f5667f3-1252x832.svg" alt="High-level architecture" width="600">
 
@@ -39,70 +38,53 @@ The database owns the schema, tables, indexes, the committer, the transaction lo
 
 There are three function types: queries (read-only), mutations (read-write), and actions (side effects allowed).
 Queries and mutations run as transactions within the database.
-Code is bundled and pushed to Convex on deploy.
 
-The UDF environment is set up in `crates/isolate/src/environment/udf/mod.rs`.
-Actions have a separate environment at `crates/isolate/src/environment/action/`.
-The syscall interface that provides controlled access to the database lives in `crates/isolate/src/environment/udf/syscall.rs`.
+## Transaction Log and Index
 
-## Transaction Log
+An append-only data structure that stores all versions of documents within the database. Every version of a document contains a monotonically increasing timestamp within the log that’s like a version number.
 
-The transaction log is an append-only data structure storing all versions of every document.
-Each document revision carries a monotonically increasing timestamp that serves as its version number.
-All tables share the same timestamp sequence, and multiple changes at the same timestamp apply atomically.
+The transaction log contains all tables’ documents mixed together in timestamp order, where all tables share the same sequence of timestamps.
 
-Each timestamp *t* defines a database snapshot containing all revisions up to *t*.
+Each timestamp `t` defines a snapshot of the database that includes all revisions up to `t`.
 
-<img src="https://cdn.sanity.io/images/ts10onj4/production/34f7865d20bbedf57a192279a41cef39eeed1ec0-1124x980.svg" alt="Transaction log with updates" width="600">
-
-Timestamps are Hybrid Logical Clocks, represented as nanoseconds since the Unix epoch in a 64-bit integer (`crates/common/src/types/timestamp.rs`).
-The write log holds the in-memory portion of the transaction log (`crates/database/src/write_log.rs`).
-The snapshot manager provides views of the database at different timestamps (`crates/database/src/snapshot_manager.rs`).
-The persistence layer handles durable storage (`crates/common/src/persistence.rs`).
-
-## Indexes
-
-Indexes are built on top of the log, mapping each `_id` to its latest value.
-They use standard multiversion concurrency control (MVCC) techniques so the index can be queried at any past timestamp.
-The system does not store many copies of each value -- see [CMU's Advanced DB Systems](https://www.cs.cmu.edu/~15721-f25/schedule.html) for background on MVCC implementation strategies.
+Indexes are built on top of the log, mapping each `_id` to its latest value. They are implementated using standard multiversion concurrency control (MVCC) techniques so the index can be queried at any past timestamp.
+The system does not store many copies of each value -- see [CMU's Advanced DB Systems](https://www.cs.cmu.edu/~15721-f25/schedule.html) for more info.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/731ffc87aab77be756fe915d6fc3fe6f5ecbf45b-1124x980.svg" alt="Index mapping" width="600">
-
-Transaction-level index access is in `crates/database/src/transaction_index.rs`.
-The function runner maintains in-memory indexes in `crates/function_runner/src/in_memory_indexes.rs`.
-Index metadata and bootstrap logic live in `crates/common/src/bootstrap_model/index/`.
 
 ---
 
 ## Transactions and Optimistic Concurrency Control
 
-All transactions are serializable.
-Their behavior is identical to sequential execution.
-Convex implements this via optimistic concurrency control: assume conflicts are rare, record reads and writes during execution, then check for conflicts at commit time.
+All transactions are serializable, which means that their behavior is exactly the same as if they executed one at a time. It is implemented using optimistic concurrency control, which assumes that conflicts between txs are rare, record what each tx reads and writes, and check for conflicts at the end of the tx's execution. 
 
-Each transaction carries three ingredients.
-The begin timestamp selects the database snapshot used for all reads.
-The read set precisely records every index range the transaction scanned.
-The write set maps each document ID to the new value proposed by the transaction.
+Transactions have three main ingredients: a begin timestamp [1], their read set, and their write set.
+
+This timestamp chooses a snapshot of the database for all reads during the transaction’s execution.
+
+After querying the index, we record the index range we scanned in the transaction’s read set. The read set precisely records all of the data that a transaction queried.
+
+Instead of writing to the Tx log or indexes immediately, the transaction accumulates updates in its write set, which contains a map of each ID to the new value proposed by the transaction.
+
+[1] Convex’s timestamps are [Hybrid Logical Clocks](https://cse.buffalo.edu/tech-reports/2014-04.pdf) of nanoseconds since the Unix epoch in a 64-bit integer.
 
 The `Transaction` struct lives in `crates/database/src/transaction.rs`.
 Read set tracking is in `crates/database/src/reads.rs`.
 Write set accumulation is in `crates/database/src/writes.rs`.
-The `Token` type captures the transaction's position for validation (`crates/database/src/token.rs`).
 
 ## Commit Protocol
 
-The committer is the sole writer to the transaction log.
-It receives finalized transactions, decides whether they are safe to commit, and appends their write sets.
+The committer in our system is the sole writer to the transaction log, and it receives finalized transactions, decides if they’re safe to commit, and then appends their write sets to the transaction log.
 
-The protocol works as follows.
-First, a commit timestamp is assigned that is larger than all previously committed transactions.
-Then serializability is checked by asking: would this transaction have produced the exact same outcome if it had executed at the commit timestamp instead of the begin timestamp?
-To answer this, the committer walks all writes between the begin and commit timestamps and checks for overlap with the transaction's read set.
-If no overlap exists, the write set is appended to the log.
-If overlap is found, the transaction is aborted and the function runner retries at a new begin timestamp past the conflict.
+The committer starts by first assigning a commit timestamp to the transaction that’s larger than all previously committed transactions.
 
-This design is similar to FoundationDB's and Aria's commit protocols.
+We can check whether it’s serializable to commit our transaction at timestamp 19 by answering the question, “Would our transaction have the exact same outcome if it executed at timestamp 19 instead of timestamp 16?”.
+
+To do this, we can check whether any of the writes between the begin timestamp and commit timestamp overlap with our transaction’s read set.
+
+If, however, we found a concurrent write that overlapped with our transaction’s read set, we have to abort the transaction. This error signals that the transaction conflicted with a concurrent write and needs to be retried. The function runner will then retry addCart at a new begin timestamp past the conflict write.
+
+Our commit protocol is similar in design to FoundationDB’s and Aria’s. 
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/b2c6c8c76eba8c59fe7cd381cf1e97e24debe0dd-1124x1172.svg" alt="Conflict detection" width="600">
 
@@ -164,17 +146,6 @@ Convex automatically caches queries, and the cache is always fully consistent.
 It uses the same overlap-detection algorithm as the subscription manager to determine whether a cached result's read set is still valid at a given timestamp.
 
 The cache implementation is in `crates/application/src/cache/mod.rs`.
-
-## Sandboxing and Determinism
-
-Mutations must have no external side effects, which is enforced through sandboxing.
-Queries must be fully determined by their arguments and database reads.
-These constraints enable safe retries and precise subscriptions.
-
-The isolate sandbox environment is in `crates/isolate/src/environment/udf/mod.rs`.
-Determinism checks are in `crates/isolate/src/request_scope.rs`.
-The syscall provider that serves as the controlled interface to the database is in `crates/isolate/src/environment/udf/syscall.rs`.
-Deterministic crypto RNG seeding is in `crates/isolate/src/environment/crypto_rng.rs`.
 
 ---
 
