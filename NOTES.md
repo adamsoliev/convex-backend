@@ -6,23 +6,17 @@ Notes from [How Convex Works](https://stack.convex.dev/how-convex-works) by Suja
 
 ## Overview
 
-Convex is a database running in the cloud that executes client-defined API functions as transactions directly within the database. The frontend connects to a Convex deployment over a persistent WebSocket.
-
-<img src="https://cdn.sanity.io/images/ts10onj4/production/f20ad6be4bbaeb7c469466c2106e3f605f67d8e9-1588x931.svg" alt="Deployment overview" width="600">
+Convex is a database running in the cloud that executes client-defined API functions as transactions directly within the database.
+The frontend connects to a Convex deployment over a persistent WebSocket.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/2ae339f39a62935266bd1518844dbdb32f5667f3-1252x832.svg" alt="High-level architecture" width="600">
 
-A Convex deployment has three main components:
+A Convex deployment has three main components: the sync worker, the function runner, and the database.
+The sync worker manages WebSocket sessions and tracks each client's active query set.
+The function runner executes user-defined functions inside V8 isolates and caches their results.
+The database owns the schema, tables, indexes, the committer, the transaction log, and subscriptions.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/080ed291f78449353715fd412f161633ac237078-1412x1627.svg" alt="Deployment internals" width="600">
-
-| Component | Role |
-|-----------|------|
-| Sync Worker | Manages WebSocket sessions, tracks query sets |
-| Function Runner | Executes UDFs in V8, caches results, stores code |
-| Database | Schema, tables, indexes, committer, tx log, subscriptions |
-
-**Codebase mapping:**
 
 | Component | Crate | Key files |
 |-----------|-------|-----------|
@@ -41,71 +35,78 @@ A Convex deployment has three main components:
 
 ---
 
-### Functions
+## Functions
 
-Three types: **queries** (read-only), **mutations** (read-write), and **actions** (side effects allowed). Queries and mutations run as transactions within the database. Code is bundled and pushed to Convex on deploy.
+There are three function types: queries (read-only), mutations (read-write), and actions (side effects allowed).
+Queries and mutations run as transactions within the database.
+Code is bundled and pushed to Convex on deploy.
 
-- UDF environment setup: `crates/isolate/src/environment/udf/mod.rs`
-- Action environment: `crates/isolate/src/environment/action/`
-- Syscall interface: `crates/isolate/src/environment/udf/syscall.rs`
+The UDF environment is set up in `crates/isolate/src/environment/udf/mod.rs`.
+Actions have a separate environment at `crates/isolate/src/environment/action/`.
+The syscall interface that provides controlled access to the database lives in `crates/isolate/src/environment/udf/syscall.rs`.
 
-### Transaction Log
+## Transaction Log
 
-An append-only data structure storing all versions of documents. Every document revision carries a monotonically increasing timestamp (version number). All tables share the same timestamp sequence. Multiple changes at the same timestamp apply atomically.
+The transaction log is an append-only data structure storing all versions of every document.
+Each document revision carries a monotonically increasing timestamp that serves as its version number.
+All tables share the same timestamp sequence, and multiple changes at the same timestamp apply atomically.
 
-Each timestamp *t* defines a snapshot of the database that includes all revisions up to *t*.
+Each timestamp *t* defines a database snapshot containing all revisions up to *t*.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/46849de92a3a9faa7e393056c428a9a29b993a3a-1124x660.svg" alt="Transaction log" width="600">
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/34f7865d20bbedf57a192279a41cef39eeed1ec0-1124x980.svg" alt="Transaction log with updates" width="600">
 
-- Timestamps are Hybrid Logical Clocks (nanoseconds since Unix epoch, 64-bit integer): `crates/common/src/types/timestamp.rs`
-- Write log (the in-memory portion of the tx log): `crates/database/src/write_log.rs`
-- Snapshot manager (manages views of the database at different timestamps): `crates/database/src/snapshot_manager.rs`
-- Persistence layer: `crates/common/src/persistence.rs`
+Timestamps are Hybrid Logical Clocks, represented as nanoseconds since the Unix epoch in a 64-bit integer (`crates/common/src/types/timestamp.rs`).
+The write log holds the in-memory portion of the transaction log (`crates/database/src/write_log.rs`).
+The snapshot manager provides views of the database at different timestamps (`crates/database/src/snapshot_manager.rs`).
+The persistence layer handles durable storage (`crates/common/src/persistence.rs`).
 
-### Indexes
+## Indexes
 
-Built on top of the log, mapping each `_id` to its latest value. Uses standard multiversion concurrency control (MVCC) techniques so the index can be queried at any past timestamp. We don't store many copies -- see [CMU's Advanced DB Systems](https://www.cs.cmu.edu/~15721-f25/schedule.html).
+Indexes are built on top of the log, mapping each `_id` to its latest value.
+They use standard multiversion concurrency control (MVCC) techniques so the index can be queried at any past timestamp.
+The system does not store many copies of each value -- see [CMU's Advanced DB Systems](https://www.cs.cmu.edu/~15721-f25/schedule.html) for background on MVCC implementation strategies.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/731ffc87aab77be756fe915d6fc3fe6f5ecbf45b-1124x980.svg" alt="Index mapping" width="600">
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/1e78ad935e2b51227b93448cc752f5991152bb8d-1124x980.svg" alt="Multiversion index" width="600">
 
-- Transaction-level index access: `crates/database/src/transaction_index.rs`
-- In-memory indexes in function runner: `crates/function_runner/src/in_memory_indexes.rs`
-- Index metadata/bootstrap: `crates/common/src/bootstrap_model/index/`
+Transaction-level index access is in `crates/database/src/transaction_index.rs`.
+The function runner maintains in-memory indexes in `crates/function_runner/src/in_memory_indexes.rs`.
+Index metadata and bootstrap logic live in `crates/common/src/bootstrap_model/index/`.
 
 ---
 
-### Transactions & Optimistic Concurrency Control
+## Transactions and Optimistic Concurrency Control
 
-All transactions are serializable -- behavior is identical to sequential execution. Implemented via optimistic concurrency control: assume conflicts are rare, record reads/writes, check for conflicts at commit time.
+All transactions are serializable.
+Their behavior is identical to sequential execution.
+Convex implements this via optimistic concurrency control: assume conflicts are rare, record reads and writes during execution, then check for conflicts at commit time.
 
-Three ingredients per transaction:
+Each transaction carries three ingredients.
+The begin timestamp selects the database snapshot used for all reads.
+The read set precisely records every index range the transaction scanned.
+The write set maps each document ID to the new value proposed by the transaction.
 
-1. **Begin timestamp** -- chooses the database snapshot for all reads
-2. **Read set** -- precisely records all data the transaction queried (index ranges scanned)
-3. **Write set** -- maps each ID to the new value proposed by the transaction
+The `Transaction` struct lives in `crates/database/src/transaction.rs`.
+Read set tracking is in `crates/database/src/reads.rs`.
+Write set accumulation is in `crates/database/src/writes.rs`.
+The `Token` type captures the transaction's position for validation (`crates/database/src/token.rs`).
 
-- Transaction struct: `crates/database/src/transaction.rs`
-- Read set tracking: `crates/database/src/reads.rs`
-- Write set accumulation: `crates/database/src/writes.rs`
-- Token (captures the transaction's position for validation): `crates/database/src/token.rs`
+## Commit Protocol
 
-### Commit Protocol
+The committer is the sole writer to the transaction log.
+It receives finalized transactions, decides whether they are safe to commit, and appends their write sets.
 
-The committer is the sole writer to the transaction log. It receives finalized transactions, decides if they're safe to commit, and appends their write sets.
+The protocol works as follows.
+First, a commit timestamp is assigned that is larger than all previously committed transactions.
+Then serializability is checked by asking: would this transaction have produced the exact same outcome if it had executed at the commit timestamp instead of the begin timestamp?
+To answer this, the committer walks all writes between the begin and commit timestamps and checks for overlap with the transaction's read set.
+If no overlap exists, the write set is appended to the log.
+If overlap is found, the transaction is aborted and the function runner retries at a new begin timestamp past the conflict.
 
-The commit protocol:
-
-1. Assign a commit timestamp larger than all previously committed transactions
-2. Check serializability: "Would this transaction have the exact same outcome if it executed at the commit timestamp instead of the begin timestamp?"
-3. Walk writes between begin and commit timestamps, check for overlap with the read set
-4. If no overlap -> commit (append to log)
-5. If overlap -> abort. The function runner retries at a new begin timestamp past the conflict
-
-Similar in design to FoundationDB's and Aria's commit protocols.
+This design is similar to FoundationDB's and Aria's commit protocols.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/dc3be57f330069703714473ad266f0693cdda3f7-1124x1172.svg" alt="Commit protocol check" width="600">
 
@@ -113,20 +114,27 @@ Similar in design to FoundationDB's and Aria's commit protocols.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/f3acb829fe53e5bb37cdb58add171bf783a5d8d9-1076x1316.svg" alt="Transaction commit" width="600">
 
-- Committer implementation: `crates/database/src/committer.rs`
-- Database commit entry point: `crates/database/src/database.rs`
+The committer implementation is in `crates/database/src/committer.rs`.
+The database-level commit entry point is in `crates/database/src/database.rs`.
 
-#### Detailed Commit Flow
+### Detailed Commit Flow
 
-Transactions don't write to the transaction log immediately. Instead they collect reads and writes locally, then submit the finalized transaction to the committer for validation.
+Transactions do not write to the transaction log immediately.
+Instead, they collect reads and writes locally, then submit the finalized transaction to the committer for validation.
 
-1. During execution, `Transaction` accumulates reads into `TransactionReadSet` and writes into `Writes` (an `OrdSet<Update>`)
-2. On completion, the transaction is finalized into `FinalTransaction` (reads + writes)
-3. `Committer::start_commit()` receives the `FinalTransaction` and calls `validate_commit()`
-4. `validate_commit()` assigns a commit timestamp and calls `commit_has_conflict()`, which checks the read set against **two** sources: already-published writes (in `LogWriter`) and staged-but-not-yet-published writes (in `PendingWrites`) — this prevents two concurrent transactions from both passing validation against published state but conflicting with each other
-5. The conflict check window is `(begin_timestamp, commit_ts]`. For each write in that window, `ReadSet::writes_overlap_docs()` checks whether the written document's index keys fall within any interval the transaction read
-6. If no conflict: the commit is staged in `PendingWrites`, then `write_to_persistence()` durably writes it, and finally `publish_commit()` pops it from pending, appends to the write log, and updates the snapshot manager
-7. If conflict: OCC error returned, the function runner retries at a new begin timestamp
+During execution, `Transaction` accumulates reads into `TransactionReadSet` and writes into `Writes` (an `OrdSet<Update>`).
+On completion, the transaction is finalized into a `FinalTransaction` containing both sets.
+`Committer::start_commit()` receives the `FinalTransaction` and calls `validate_commit()`.
+
+The validation step assigns a commit timestamp and calls `commit_has_conflict()`.
+This method checks the read set against two sources: already-published writes in `LogWriter` and staged-but-not-yet-published writes in `PendingWrites`.
+Checking both sources prevents two concurrent transactions from both passing validation against published state while conflicting with each other.
+
+The conflict check window is `(begin_timestamp, commit_ts]`.
+For each write in that window, `ReadSet::writes_overlap_docs()` checks whether the written document's index keys fall within any interval the transaction read.
+
+If no conflict is found, the commit is staged in `PendingWrites`, then `write_to_persistence()` durably writes it, and finally `publish_commit()` pops it from pending, appends to the write log, and updates the snapshot manager.
+If a conflict is detected, an OCC error is returned and the function runner retries at a new begin timestamp.
 
 <img src="commit-flow.png" alt="Detailed commit flow sequence diagram" width="600">
 
@@ -134,7 +142,7 @@ Transactions don't write to the transaction log immediately. Instead they collec
 |-----------|------|---------------------|
 | Write accumulation | `writes.rs` | `Writes::update()` |
 | Read tracking | `reads.rs` | `ReadSet`, `TransactionReadSet` |
-| Transaction | `transaction.rs` | `Transaction` → `FinalTransaction` |
+| Transaction | `transaction.rs` | `Transaction` -> `FinalTransaction` |
 | Commit validation | `committer.rs` | `Committer::validate_commit()` |
 | Conflict detection | `reads.rs` | `ReadSet::writes_overlap_docs()` |
 | Pending staging | `write_log.rs` | `PendingWrites::push_back()`, `is_stale()` |
@@ -143,48 +151,52 @@ Transactions don't write to the transaction log immediately. Instead they collec
 
 All files under `crates/database/src/`.
 
-### Subscriptions
+## Subscriptions
 
-Read sets also power realtime updates. After running a query, the system keeps its read set in the client's WebSocket session within the sync worker. When new entries appear in the transaction log, the same overlap-detection algorithm determines if the query result might have changed.
+Read sets also power realtime updates.
+After running a query, the system keeps its read set in the client's WebSocket session within the sync worker.
+When new entries appear in the transaction log, the same overlap-detection algorithm determines whether the query result might have changed.
 
-The subscription manager aggregates all client sessions, walks the transaction log once, and efficiently finds which subscriptions are invalidated.
+The subscription manager aggregates all client sessions, walks the transaction log once, and efficiently identifies which subscriptions are invalidated.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/06ad6e04496479c2c5cd7362c27f606e04f0d51e-1268x1300.svg" alt="Subscription manager" width="600">
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/1c717328429e37026eb3c40b09a088357e179d92-1124x996.svg" alt="Subscription overlap detection" width="600">
 
-- Subscription manager: `crates/database/src/subscription.rs`
-- Local backend subscription handling: `crates/local_backend/src/subs/mod.rs`
-- Sync worker (manages WebSocket sessions and query sets): `crates/sync/src/worker.rs`
+The subscription manager lives in `crates/database/src/subscription.rs`.
+Local backend subscription handling is in `crates/local_backend/src/subs/mod.rs`.
+The sync worker that manages WebSocket sessions and query sets is in `crates/sync/src/worker.rs`.
 
-### Function Cache
+## Function Cache
 
-Serving a cached result out of memory is much faster than spinning up a V8 isolate. Convex automatically caches queries, and the cache is always 100% consistent. It uses the same overlap-detection algorithm as the subscription manager to determine whether a cached result's read set is still valid at a given timestamp.
+Serving a cached result from memory is much faster than spinning up a V8 isolate.
+Convex automatically caches queries, and the cache is always fully consistent.
+It uses the same overlap-detection algorithm as the subscription manager to determine whether a cached result's read set is still valid at a given timestamp.
 
-- Cache implementation: `crates/application/src/cache/mod.rs`
+The cache implementation is in `crates/application/src/cache/mod.rs`.
 
-### Sandboxing & Determinism
+## Sandboxing and Determinism
 
-Mutations must have no external side effects (enforced through sandboxing). Queries must be fully determined by their arguments and database reads. This enables safe retries and precise subscriptions.
+Mutations must have no external side effects, which is enforced through sandboxing.
+Queries must be fully determined by their arguments and database reads.
+These constraints enable safe retries and precise subscriptions.
 
-- Isolate sandbox environment: `crates/isolate/src/environment/udf/mod.rs`
-- Determinism checks: `crates/isolate/src/request_scope.rs`
-- Syscall provider (controlled interface to the database): `crates/isolate/src/environment/udf/syscall.rs`
-- Crypto RNG (deterministic seeding): `crates/isolate/src/environment/crypto_rng.rs`
+The isolate sandbox environment is in `crates/isolate/src/environment/udf/mod.rs`.
+Determinism checks are in `crates/isolate/src/request_scope.rs`.
+The syscall provider that serves as the controlled interface to the database is in `crates/isolate/src/environment/udf/syscall.rs`.
+Deterministic crypto RNG seeding is in `crates/isolate/src/environment/crypto_rng.rs`.
 
 ---
 
-### Executing a Query
+## Executing a Query
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/86bf1fae07efd38abaaafe95a5fb9bf15cef9839-1656x1855.svg" alt="Query request flow" width="600">
 
-1. Client mounts a component, React hook opens a WebSocket
-2. Query registered with the **sync worker** (`crates/sync/src/worker.rs`)
-3. Sync worker delegates to the **function runner** (`crates/function_runner/src/server.rs`)
-4. Function runner checks the **function cache** (`crates/application/src/cache/mod.rs`)
-5. On cache miss: spins up V8 isolate, executes the query (`crates/isolate/src/isolate_worker.rs`)
-6. Result + read set returned; subscription registered with the **subscription manager**
-7. Result sent back over WebSocket to client
+The client mounts a component and a React hook opens a WebSocket connection.
+The query is registered with the sync worker (`crates/sync/src/worker.rs`), which delegates it to the function runner (`crates/function_runner/src/server.rs`).
+The function runner first checks the function cache (`crates/application/src/cache/mod.rs`).
+On a cache miss, it spins up a V8 isolate and executes the query (`crates/isolate/src/isolate_worker.rs`).
+The result and read set are returned, a subscription is registered with the subscription manager, and the result is sent back to the client over the WebSocket.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/078f5fd47459a45b328460ad72c938f920788820-2084x1636.svg" alt="WebSocket connection" width="600">
 
@@ -192,26 +204,24 @@ Mutations must have no external side effects (enforced through sandboxing). Quer
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/0cac02f131fb6655dff43cf842b5f3c762c35265-1732x1781.svg" alt="Function runner cache" width="600">
 
-### Executing a Mutation
+## Executing a Mutation
 
-1. Client sends mutation request through WebSocket
-2. Sync worker forwards to function runner
-3. Function runner executes the mutation in V8, producing read set + write set
-4. Read/write sets sent to the **committer** (`crates/database/src/committer.rs`)
-5. Committer validates serializability (read set vs. concurrent writes)
-6. On success: appends write set to transaction log, returns commit timestamp
-7. On conflict: aborts, function runner retries at new timestamp
+The client sends a mutation request through the WebSocket and the sync worker forwards it to the function runner.
+The function runner executes the mutation in V8, producing a read set and a write set.
+These are sent to the committer (`crates/database/src/committer.rs`), which validates serializability by checking the read set against concurrent writes.
+On success, the write set is appended to the transaction log and a commit timestamp is returned.
+On conflict, the transaction is aborted and the function runner retries at a new timestamp.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/f522b5dce500b6b0ac3f4036717e540030614e87-2004x1620.svg" alt="Mutation execution" width="600">
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/8d739e25af4e2a66849b248bffa44007a761bfd5-1748x1620.svg" alt="Committer processing" width="600">
 
-### Updating a Subscription
+## Updating a Subscription
 
-1. New entry appears in transaction log after a committed mutation
-2. **Subscription manager** walks the log, checks overlap with active read sets
-3. If overlap detected: query is re-run by the function runner at the new timestamp
-4. Updated result pushed to client over WebSocket
+When a mutation commits, a new entry appears in the transaction log.
+The subscription manager walks the log and checks for overlap with active read sets.
+If overlap is detected, the query is re-run by the function runner at the new timestamp.
+The updated result is pushed to the client over the WebSocket.
 
 <img src="https://cdn.sanity.io/images/ts10onj4/production/f93766ddd64152d67436d5e0826cf6a1da628870-1684x1657.svg" alt="Subscription updates" width="600">
 
